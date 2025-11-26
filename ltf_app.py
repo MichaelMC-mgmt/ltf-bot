@@ -182,5 +182,18 @@ def webhook():
         logging.error(f"Webhook error: {e}")
         return jsonify({'status': 'error'}), 500
 
+# GIVES DASHBOARD LIVE DATA
+@app.route('/state')
+def state():
+    return jsonify({
+        'states': states,
+        'equity': get_equity(),
+        'position': {
+            'side': states['ETHUSDT']['direction'].upper() if states['ETHUSDT']['in_position'] else "FLAT",
+            'size': states['ETHUSDT']['size'],
+            'entry': states['ETHUSDT']['entry_price']
+        } if states['ETHUSDT']['in_position'] else None
+    })
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))

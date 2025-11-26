@@ -3,7 +3,18 @@ from dash import Dash, html, dcc, Input, Output
 import plotly.graph_objs as go
 
 # Import your bot's live state
-from ltf_app import states, get_equity, exchange, ASSETS  # ← Added ASSETS import
+# CONNECT TO YOUR LIVE RENDER BOT
+import requests
+import json
+
+RENDER_BOT_URL = "https://ltf-bot.onrender.com"  # ← YOUR LIVE BOT URL
+
+def get_bot_state():
+    try:
+        r = requests.get(f"{RENDER_BOT_URL}/state", timeout=5)
+        return r.json() if r.status_code == 200 else {}
+    except:
+        return {}
 
 app = Dash(__name__)
 app.title = "LTF Bot Dashboard"
@@ -125,4 +136,5 @@ if __name__ == '__main__':
     print("LTF DASHBOARD IS LIVE → http://127.0.0.1:8050")
     print("Make sure ltf_app.py is running on port 5000!")
     print("="*70 + "\n")
+
     app.run(host='0.0.0.0', port=8050, debug=False)

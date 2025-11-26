@@ -31,6 +31,10 @@ exchange = ccxt.bybit({
 })
 exchange.load_markets()
 
+exchange.options['defaultType'] = 'future'
+exchange.markets = {k: v for k, v in exchange.markets.items() if v.get('future') or v.get('linear')}
+logging.info("Render fix applied — futures only, no spot 403")
+
 # Isolated + 10x
 def setup_isolated(symbol):
     try:
@@ -181,4 +185,5 @@ def webhook():
         return jsonify({'status': 'error'}), 500
 
 if __name__ == "__main__":
+
     app.run(host="0.0.0.0", port=5000, debug=False)

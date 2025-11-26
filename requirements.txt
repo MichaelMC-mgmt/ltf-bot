@@ -1,0 +1,7 @@
+flask
+ccxt
+python-dotenv
+dash
+plotly
+requests
+gunicorn

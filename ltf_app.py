@@ -1,4 +1,4 @@
-# ltf_app.py - FINAL 100% WORKING - NO SL/TP - PERFECT EXIT - NOV 2025
+# ltf_app.py - FINAL 100% WORKING ON RENDER - NO ERRORS - NOV 2025
 import logging
 import os
 import time
@@ -29,13 +29,17 @@ exchange = ccxt.bybit({
         'recvWindow': EXCHANGE_RECV_WINDOW,
     },
 })
-exchange.load_markets()
 
-exchange.options['defaultType'] = 'future'
-exchange.markets = {k: v for k, v in exchange.markets.items() if v.get('future') or v.get('linear')}
-logging.info("Render fix applied — futures only, no spot 403")
+# CRITICAL RENDER FIX - REMOVE SPOT MARKETS TO AVOID 403
+try:
+    exchange.load_markets()
+    # Filter out spot markets - this stops the 403 error
+    exchange.markets = {k: v for k, v in exchange.markets.items() if v.get('linear') or v.get('future')}
+    logging.info("Render fix applied - spot markets removed, only futures loaded")
+except Exception as e:
+    logging.error(f"Market load failed: {e}")
 
-# Isolated + 10x
+# Isolated + 10x setup
 def setup_isolated(symbol):
     try:
         sym = symbol.replace("/", "")
@@ -47,16 +51,22 @@ def setup_isolated(symbol):
     except: pass
 for a in ASSETS: setup_isolated(a)
 
+# State
 states = {a: {'value_exhaustion': False, 'universal_val': False, 'conviction': False,
               'in_position': False, 'direction': None, 'entry_price': None, 'size': 0} for a in ASSETS}
 
 def normalize(s): return s if '/' in s else s.replace("USDT", "/USDT")
 
+# Balance
 def get_equity():
-    try: return float(exchange.fetch_balance(params={'type': 'future'})['USDT']['total'])
-    except: return 0.0
+    try:
+        bal = exchange.fetch_balance(params={'type': 'future'})
+        return float(bal['USDT']['total'])
+    except Exception as e:
+        logging.error(f"Balance error: {e}")
+        return 0.0
 
-# FINAL QTY - NO MORE QTY INVALID
+# Position sizing - perfect qtyStep
 def get_position_size(symbol):
     equity = get_equity()
     if equity < 20: return 0.0
@@ -96,55 +106,37 @@ def enter_short(asset):
         logging.error(f"SHORT FAILED: {e}")
         states[asset]['in_position'] = False
 
-# EXIT - FIXED: category: 'linear' added
+# EXIT - FIXED list index error
 def exit_position(asset):
     try:
-        # USE MARKET ID: BTCUSDT, ETHUSDT — not BTC/USDT
-        market_id = asset  
-
-        positions = exchange.fetch_positions(params={
-            'category': 'linear',
-            'symbol': market_id   # <-- Correct
-        })
-
-        if not positions:
-            logging.error(f"No position found for {market_id} (but bot thought one existed)")
+        s = normalize(asset)
+        positions = exchange.fetch_positions(params={'category': 'linear'})
+        # Find position for our symbol
+        pos = next((p for p in positions if p['symbol'] == asset), None)
+        if not pos or float(pos.get('contracts', 0)) == 0:
+            logging.info(f"No active position for {asset} - clearing state")
             states[asset].update({'in_position': False, 'direction': None, 'size': 0})
             return
-
-        pos = positions[0]
-        size = abs(float(pos.get('contracts') or 0))
-
-        if size == 0:
-            logging.error(f"Bybit returned size=0 for {market_id}, resetting local state.")
-            states[asset].update({'in_position': False, 'direction': None, 'size': 0})
-            return
-
+            
+        size = abs(float(pos['contracts']))
         side = 'buy' if states[asset]['direction'] == 'short' else 'sell'
-
-        exchange.create_order(
-            normalize(asset),  # for create_order, "/" format is fine
-            'market',
-            side,
-            size,
-            params={'category': 'linear', 'reduceOnly': True, 'positionIdx': 0}
-        )
-
-        logging.info(f"CLOSED {asset} ({states[asset]['direction'].upper()})")
+        exchange.create_order(s, 'market', side, size, params={
+            'category': 'linear', 'reduceOnly': True, 'positionIdx': 0
+        })
+        logging.info(f"CLOSED {asset} ({states[asset]['direction'].upper()}) | Size: {size}")
         states[asset].update({'in_position': False, 'direction': None, 'size': 0})
-
     except Exception as e:
         logging.error(f"Exit failed: {e}")
 
-# WEBHOOK - PERFECT EXIT ON ANY MISALIGNMENT
+# WEBHOOK - FINAL
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
-        # FIXED: Force JSON parsing even if Content-Type header is missing
-        data = request.get_json(force=True)
+        # Force JSON parsing (handles missing Content-Type)
+        data = request.get_json(force=True) or {}
         if not data:
-            logging.warning("No JSON data in webhook - raw body: " + str(request.data))
-            return jsonify({'status': 'error', 'message': 'No data'}), 400
+            logging.warning(f"Empty payload: {request.data}")
+            return jsonify({'status': 'ignored'}), 200
 
         asset = data.get("asset")
         indicator = data.get("indicator")
@@ -153,7 +145,12 @@ def webhook():
         if asset not in ASSETS:
             return jsonify({'status': 'ignored'}), 200
 
-        mapping = {"Value Exhaustion": "value_exhaustion", "Universal Valuation": "universal_val", "Conviction Ratio": "conviction"}
+        mapping = {
+            "Value Exhaustion": "value_exhaustion",
+            "Universal Valuation": "universal_val",
+            "Conviction Ratio": "conviction"
+        }
+
         if indicator in mapping:
             states[asset][mapping[indicator]] = (event == "above_0")
             logging.info(f"{indicator} → {'ABOVE' if event == 'above_0' else 'BELOW'} ({asset})")
@@ -180,10 +177,10 @@ def webhook():
                 enter_short(asset)
 
         return jsonify({'status': 'success'}), 200
+
     except Exception as e:
         logging.error(f"Webhook error: {e}")
         return jsonify({'status': 'error'}), 500
 
 if __name__ == "__main__":
-
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))

@@ -1,140 +1,194 @@
-# dashboard.py - FINAL 100% WORKING DASHBOARD - NOV 2025
-from dash import Dash, html, dcc, Input, Output
-import plotly.graph_objs as go
+# app.py - {MC} Terminal – Multi-Page Dashboard (November 2025)
+from dash import Dash, html, dcc, page_registry, page_container, callback, Input, Output, State
+import dash_bootstrap_components as dbc
+import dash
 
-# Import your bot's live state
-# CONNECT TO YOUR LIVE RENDER BOT
-import requests
-import json
+# Use a clean external Bootstrap theme + custom CSS for terminal feel
+external_stylesheets = [
+    "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css",
+    dbc.themes.DARKLY,  # Base dark theme
+]
 
-RENDER_BOT_URL = "https://ltf-bot.onrender.com"  # ← YOUR LIVE BOT URL
+app = Dash(
+    __name__,
+    use_pages=True,                    # Enables multi-page
+    external_stylesheets=external_stylesheets,
+    suppress_callback_exceptions=True,
+    meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1"}]
+)
 
-def get_bot_state():
-    try:
-        r = requests.get(f"{RENDER_BOT_URL}/state", timeout=5)
-        return r.json() if r.status_code == 200 else {}
-    except:
-        return {}
+app.title = "{MC} Terminal"
 
-app = Dash(__name__)
-app.title = "LTF Bot Dashboard"
+# Custom CSS to match your exact design
+app.index_string = '''
+<!DOCTYPE html>
+<html>
+    <head>
+        {%metas%}
+        <title>{%title%}</title>
+        {%favicon%}
+        {%css%}
+        <style>
+            body {
+                background-color: #000000;
+                margin: 0;
+                padding: 0;
+                font-family: 'Consolas', 'Courier New', monospace;
+            }
+            .terminal-title {
+                font-size: 2.8rem;
+                font-weight: bold;
+                background: linear-gradient(90deg, #00ffff, #0088ff);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                margin-bottom: 60px;
+                letter-spacing: 4px;
+            }
+            .nav-button {
+                background-color: #0d1117 !important;
+                border: 2px solid #30363d !important;
+                border-radius: 12px !important;
+                color: #58a6ff !important;
+                font-size: 1.4rem;
+                font-weight: 600;
+                padding: 18px 32px !important;
+                margin: 12px 0;
+                width: 380px;
+                text-align: left;
+                transition: all 0.3s ease;
+                box-shadow: 0 4px 15px rgba(0, 0, 0, 0.6);
+            }
+            .nav-button:hover {
+                background-color: #161b22 !important;
+                border-color: #58a6ff !important;
+                color: white !important;
+                transform: translateY(-3px);
+                box-shadow: 0 8px 25px rgba(88, 166, 255, 0.3);
+            }
+            .nav-button.active {
+                background: linear-gradient(90deg, #003366, #000000) !important;
+                border-color: #00ffff !important;
+                color: #00ffff !important;
+                box-shadow: 0 0 20px rgba(0, 255, 255, 0.4);
+            }
+            .tab-selected {
+                background-color: #1f6feb !important;
+                color: white !important;
+            }
+        </style>
+    </head>
+    <body>
+        {%app_entry%}
+        <footer>
+            {%config%}
+            {%scripts%}
+            {%renderer%}
+        </footer>
+    </body>
+</html>
+'''
 
-# Dark theme style
-card_style = {
-    'backgroundColor': '#1e1e2e',
-    'color': 'white',
-    'padding': '20px',
-    'margin': '10px',
-    'borderRadius': '10px',
-    'textAlign': 'center',
-    'minWidth': '180px',
-    'boxShadow': '0 4px 8px rgba(0,0,0,0.3)'
-}
-
-app.layout = html.Div(style={'backgroundColor': '#0d1117', 'color': 'white', 'fontFamily': 'Arial'}, children=[
-    html.H1("LTF Trading Bot - LIVE", style={'textAlign': 'center', 'margin': '30px'}),
-
-    dcc.Interval(id='interval', interval=5000, n_intervals=0),
-
-    html.Div(id='stats-row', style={'display': 'flex', 'justifyContent': 'center', 'flexWrap': 'wrap'}),
-
-    html.Hr(style={'borderColor': '#30363d'}),
-
-    html.H2("Indicator States", style={'textAlign': 'center'}),
-    html.Div(id='indicators-grid', style={'display': 'grid', 'gridTemplateColumns': 'repeat(3, 1fr)', 'gap': '20px', 'margin': '30px'}),
-
-    dcc.Graph(id='equity-chart', style={'height': '400px', 'margin': '30px'}),
-
-    html.Hr(style={'borderColor': '#30363d'}),
-
-    html.H2("Manual Controls", style={'textAlign': 'center'}),
+# Homepage Layout – EXACTLY like your screenshot
+home_layout = html.Div([
     html.Div([
-        html.Button("FORCE CLOSE ALL", id="close-all", n_clicks=0,
-                    style={'background': '#ff4444', 'color': 'white', 'padding': '15px 30px', 'margin': '10px', 'fontSize': '18px', 'border': 'none', 'borderRadius': '8px'}),
-        html.Button("Manual Long ETH", id="long-eth", n_clicks=0,
-                    style={'background': '#00aa00', 'color': 'white', 'padding': '15px 30px', 'margin': '10px', 'fontSize': '18px', 'border': 'none', 'borderRadius': '8px'}),
-        html.Button("Manual Short ETH", id="short-eth", n_clicks=0,
-                    style={'background': '#aa0000', 'color': 'white', 'padding': '15px 30px', 'margin': '10px', 'fontSize': '18px', 'border': 'none', 'borderRadius': '8px'}),
-    ], style={'textAlign': 'center', 'margin': '30px'}),
+        html.H1("{MC} Terminal", className="terminal-title"),
+        
+        # Top Tabs
+        dbc.Tabs([
+            dbc.Tab(label="LTF Bots", tab_id="ltf", label_style={"borderRadius": "8px", "margin": "0 8px"}),
+            dbc.Tab(label="HTF Bots", tab_id="htf", label_style={"borderRadius": "8px", "margin": "0 8px"}),
+        ], id="top-tabs", active_tab="ltf"),
 
-    html.Div(id='output', style={'textAlign': 'center', 'fontSize': '20px', 'margin': '20px'})
+        html.Div(style={'height': '80px'}),  # Spacer
+
+        # Navigation Buttons (Vertical Menu)
+        html.Div([
+            dbc.Button("CC Engine", id="btn-cc", className="nav-button", n_clicks=0),
+            dbc.Button("Market Regime", id="btn-regime", className="nav-button", n_clicks=0),
+            dbc.Button("Rotation Strategies", id="btn-rotation", className="nav-button", n_clicks=0),
+            dbc.Button("Liquidation Heatmap", id="btn-heatmap", className="nav-button", n_clicks=0),
+            dbc.Button("Daily PnL %", id="btn-pnl", className="nav-button", n_clicks=0),
+        ], style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center'})
+    ], style={
+        'display': 'flex',
+        'flexDirection': 'column',
+        'alignItems': 'center',
+        'justifyContent': 'center',
+        'minHeight': '100vh',
+        'padding': '40px'
+    })
 ])
 
-# Get live position
-def get_position():
-    try:
-        pos = exchange.fetch_positions(['ETHUSDT'])[0]
-        size = float(pos['contracts'])
-        if abs(size) < 0.001: return None
-        return {
-            'side': 'LONG' if size > 0 else 'SHORT',
-            'size': abs(size),
-            'entry': float(pos['entryPrice']),
-            'upl': float(pos['unrealisedPnl']),
-            'pct': float(pos.get('percentage', 0))
+# Register the home page
+dash.register_page("home", path="/", layout=home_layout, name="Home", order=0)
+
+# ===================================================================
+# Navigation Callbacks – Make buttons actually navigate
+# ===================================================================
+@callback(
+    Output("top-tabs", "active_tab"),
+    [Input("btn-cc", "n_clicks"),
+     Input("btn-regime", "n_clicks"),
+     Input("btn-rotation", "n_clicks"),
+     Input("btn-heatmap", "n_clicks"),
+     Input("btn-pnl", "n_clicks")],
+    prevent_initial_call=True
+)
+def navigate_from_buttons(*args):
+    triggered = dash.callback_context.triggered[0]["prop_id"].split(".")[0]
+    mapping = {
+        "btn-cc": "cc-engine",
+        "btn-regime": "market-regime",
+        "btn-rotation": "rotation",
+        "btn-heatmap": "heatmap",
+        "btn-pnl": "pnl"
+    }
+    if triggered in mapping:
+        dash.page_registry[mapping[triggered]]["path"]
+        # We'll handle actual navigation via client-side callback below
+    return dash.no_update
+
+# Client-side navigation (instant & smooth)
+app.clientside_callback(
+    """
+    function(cc, regime, rotation, heatmap, pnl) {
+        const triggered = (dash_clientside.callback_context || {}).triggered_id;
+        const routes = {
+            'btn-cc': '/cc-engine',
+            'btn-regime': '/market-regime',
+            'btn-rotation': '/rotation-strategies',
+            'btn-heatmap': '/liquidation-heatmap',
+            'btn-pnl': '/daily-pnl'
+        };
+        if (triggered && routes[triggered]) {
+            window.location.href = routes[triggered];
         }
-    except Exception as e:
-        print(f"Position fetch error: {e}")
-        return None
-
-@app.callback(
-    [Output('stats-row', 'children'),
-     Output('indicators-grid', 'children'),
-     Output('equity-chart', 'figure'),
-     Output('output', 'children')],
-    Input('interval', 'n_intervals')
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("top-tabs", "id"),  # dummy output
+    [Input("btn-cc", "n_clicks"),
+     Input("btn-regime", "n_clicks"),
+     Input("btn-rotation", "n_clicks"),
+     Input("btn-heatmap", "n_clicks"),
+     Input("btn-pnl", "n_clicks")]
 )
-def update_dashboard(n):
-    equity = get_equity()
-    pos = get_position()
-    eth = states.get('ETHUSDT', {})
 
-    stats = [
-        html.Div([html.H2(f"${equity:,.2f}"), html.P("Equity")], style=card_style),
-        html.Div([html.H2(pos['side'] if pos else "FLAT"), html.P("Position")], style=card_style),
-        html.Div([html.H2(f"{pos['upl']:+.2f}" if pos else "0.00"), html.P("Unrealized PnL")],
-                 style={**card_style, 'color': '#00ff00' if pos and pos['upl'] > 0 else '#ff4444'}),
-        html.Div([html.H2(f"{pos['pct']:+.2f}%" if pos else "0.00%"), html.P("Return")],
-                 style={**card_style, 'color': '#00ff00' if pos and pos['pct'] > 0 else '#ff4444'}),
-    ]
+# ===================================================================
+# App Layout (Multi-page container)
+# ===================================================================
+app.layout = html.Div([
+    dcc.Location(id="url"),
+    page_container
+])
 
-    indicators = [
-        html.Div([html.H3("Value Exhaustion"), html.H1("🟢" if eth.get('value_exhaustion') else "🔴")], style=card_style),
-        html.Div([html.H3("Universal Val"), html.H1("🟢" if eth.get('universal_val') else "🔴")], style=card_style),
-        html.Div([html.H3("Conviction Ratio"), html.H1("🟢" if eth.get('conviction') else "🔴")], style=card_style),
-    ]
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(y=[equity], mode='lines+markers', name='Equity', line=dict(color='#58a6ff')))
-    fig.update_layout(template='plotly_dark', title="Live Equity", paper_bgcolor='#0d1117', plot_bgcolor='#0d1117')
-
-    return stats, indicators, fig, ""
-
-@app.callback(
-    Output('output', 'children'),
-    [Input('close-all', 'n_clicks'), Input('long-eth', 'n_clicks'), Input('short-eth', 'n_clicks')]
-)
-def controls(c, l, s):
-    from dash import ctx
-    if not ctx.triggered: return ""
-    btn = ctx.triggered[0]['prop_id'].split('.')[0]
-    from ltf_app import exit_position, enter_long, enter_short
-    if btn == 'close-all':
-        for a in ASSETS:
-            exit_position(a)
-        return "ALL POSITIONS CLOSED"
-    if btn == 'long-eth':
-        enter_long('ETHUSDT')
-        return "MANUAL LONG EXECUTED"
-    if btn == 'short-eth':
-        enter_short('ETHUSDT')
-        return "MANUAL SHORT EXECUTED"
-    return ""
-
-if __name__ == '__main__':
-    print("\n" + "="*70)
-    print("LTF DASHBOARD IS LIVE → http://127.0.0.1:8050")
-    print("Make sure ltf_app.py is running on port 5000!")
-    print("="*70 + "\n")
-
-    app.run(host='0.0.0.0', port=8050, debug=False)
+# ===================================================================
+# Run
+# ===================================================================
+if __name__ == "__main__":
+    print("\n" + "="*80)
+    print(" {MC} TERMINAL IS LIVE ")
+    print(" → http://127.0.0.1:8050")
+    print(" → Press CTRL+C to stop")
+    print("="*80 + "\n")
+    app.run(host="0.0.0.0", port=8050, debug=False)

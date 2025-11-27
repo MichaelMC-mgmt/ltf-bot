@@ -1,4 +1,4 @@
-# ltf_app.py - FINAL 100% WORKING ON RENDER - NO ERRORS - NOV 2025
+# ltf_app.py - FINAL 100% WORKING ON RENDER - NOV 2025
 import logging
 import os
 import time
@@ -33,7 +33,6 @@ exchange = ccxt.bybit({
 # CRITICAL RENDER FIX - REMOVE SPOT MARKETS TO AVOID 403
 try:
     exchange.load_markets()
-    # Filter out spot markets - this stops the 403 error
     exchange.markets = {k: v for k, v in exchange.markets.items() if v.get('linear') or v.get('future')}
     logging.info("Render fix applied - spot markets removed, only futures loaded")
 except Exception as e:
@@ -61,15 +60,19 @@ def normalize(s): return s if '/' in s else s.replace("USDT", "/USDT")
 def get_equity():
     try:
         bal = exchange.fetch_balance(params={'type': 'future'})
-        return float(bal['USDT']['total'])
+        equity = float(bal['USDT']['total'])
+        logging.info(f"Equity: {equity}")
+        return equity
     except Exception as e:
-        logging.error(f"Balance error: {e}")
+        logging.error(f"Equity fetch failed: {e}")
         return 0.0
 
 # Position sizing - perfect qtyStep
 def get_position_size(symbol):
     equity = get_equity()
-    if equity < 20: return 0.0
+    if equity < 20:
+        logging.warning("Equity < 20 - no trade")
+        return 0.0
     price = exchange.fetch_ticker(symbol)['last']
     qty = (equity * 0.95) / price
     qty = max(qty, 0.12 if 'ETH' in symbol else 0.001)
@@ -81,7 +84,9 @@ def get_position_size(symbol):
 # ENTER LONG
 def enter_long(asset):
     size = get_position_size(normalize(asset))
-    if size < 0.001: return
+    if size < 0.001:
+        logging.warning(f"Size too small for {asset}")
+        return
     s = normalize(asset)
     try:
         exchange.create_order(s, 'market', 'buy', size, params={'category': 'linear', 'positionIdx': 0})
@@ -95,7 +100,9 @@ def enter_long(asset):
 # ENTER SHORT
 def enter_short(asset):
     size = get_position_size(normalize(asset))
-    if size < 0.001: return
+    if size < 0.001:
+        logging.warning(f"Size too small for {asset}")
+        return
     s = normalize(asset)
     try:
         exchange.create_order(s, 'market', 'sell', size, params={'category': 'linear', 'positionIdx': 0})
@@ -106,41 +113,44 @@ def enter_short(asset):
         logging.error(f"SHORT FAILED: {e}")
         states[asset]['in_position'] = False
 
-# EXIT - FIXED list index error
+# EXIT - FIXED
 def exit_position(asset):
     try:
-        s = normalize(asset)
         positions = exchange.fetch_positions(params={'category': 'linear'})
-        # Find position for our symbol
         pos = next((p for p in positions if p['symbol'] == asset), None)
         if not pos or float(pos.get('contracts', 0)) == 0:
-            logging.info(f"No active position for {asset} - clearing state")
+            logging.info(f"No position to close for {asset}")
             states[asset].update({'in_position': False, 'direction': None, 'size': 0})
             return
-            
         size = abs(float(pos['contracts']))
         side = 'buy' if states[asset]['direction'] == 'short' else 'sell'
-        exchange.create_order(s, 'market', side, size, params={
+        exchange.create_order(normalize(asset), 'market', side, size, params={
             'category': 'linear', 'reduceOnly': True, 'positionIdx': 0
         })
-        logging.info(f"CLOSED {asset} ({states[asset]['direction'].upper()}) | Size: {size}")
+        logging.info(f"CLOSED {asset} ({states[asset]['direction'].upper()})")
         states[asset].update({'in_position': False, 'direction': None, 'size': 0})
     except Exception as e:
         logging.error(f"Exit failed: {e}")
 
-# WEBHOOK - FINAL
+# WEBHOOK - FINAL FIXED
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
-        # Force JSON parsing (handles missing Content-Type)
-        data = request.get_json(force=True) or {}
-        if not data:
-            logging.warning(f"Empty payload: {request.data}")
-            return jsonify({'status': 'ignored'}), 200
+        raw = request.data.decode('utf-8')
+        logging.info(f"Raw webhook: {raw}")
+        
+        # FIXED: Handle TradingView's broken JSON
+        try:
+            data = request.get_json(force=True)
+        except:
+            # Fix bare keys
+            fixed = raw.replace("asset:", '"asset":').replace("indicator:", '"indicator":').replace("event:", '"event":')
+            import json
+            data = json.loads(fixed)
 
         asset = data.get("asset")
         indicator = data.get("indicator")
-        event = data.get("event")
+        event = data.get("event", "").strip()
 
         if asset not in ASSETS:
             return jsonify({'status': 'ignored'}), 200
@@ -152,28 +162,30 @@ def webhook():
         }
 
         if indicator in mapping:
-            states[asset][mapping[indicator]] = (event == "above_0")
-            logging.info(f"{indicator} → {'ABOVE' if event == 'above_0' else 'BELOW'} ({asset})")
+            is_above = (event == "above_0")
+            states[asset][mapping[indicator]] = is_above
+            logging.info(f"{indicator} → {'ABOVE' if is_above else 'BELOW'} ({asset})")
 
         all_above = all(states[asset][k] for k in mapping.values())
         all_below = all(not states[asset][k] for k in mapping.values())
+        logging.info(f"all_above: {all_above} | all_below: {all_below} | in_position: {states[asset]['in_position']} | direction: {states[asset]['direction']}")
 
         # EXIT ON ANY MISALIGNMENT
         if states[asset]['in_position']:
             if states[asset]['direction'] == 'long' and not all_above:
-                logging.info(f"ONE BELOW → CLOSING LONG {asset}")
+                logging.info(f"CLOSING LONG {asset} - MISALIGNMENT")
                 exit_position(asset)
             if states[asset]['direction'] == 'short' and not all_below:
-                logging.info(f"ONE ABOVE → CLOSING SHORT {asset}")
+                logging.info(f"CLOSING SHORT {asset} - MISALIGNMENT")
                 exit_position(asset)
 
         # ENTRY
         if not states[asset]['in_position']:
             if all_above:
-                logging.info(f"ALL ABOVE → LONG {asset}")
+                logging.info(f"ALL ABOVE → ENTERING LONG {asset}")
                 enter_long(asset)
             elif all_below:
-                logging.info(f"ALL BELOW → SHORT {asset}")
+                logging.info(f"ALL BELOW → ENTERING SHORT {asset}")
                 enter_short(asset)
 
         return jsonify({'status': 'success'}), 200
@@ -182,7 +194,7 @@ def webhook():
         logging.error(f"Webhook error: {e}")
         return jsonify({'status': 'error'}), 500
 
-# GIVES DASHBOARD LIVE DATA
+# DASHBOARD STATE ENDPOINT
 @app.route('/state')
 def state():
     return jsonify({
